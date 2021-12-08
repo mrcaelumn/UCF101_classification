@@ -12,6 +12,7 @@ import csv
 import cv2
 from collections import deque
 import sys
+import gc
 
 from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc, accuracy_score, precision_score, recall_score, f1_score
 
@@ -24,10 +25,9 @@ assert version.parse(tf.__version__).release[0] >= 2,     "This notebook require
 """ Set Hyper parameters """
 MAX_SEQ_LENGTH = 100
 NUM_FEATURES = 2048
-IMG_SIZE = 128
+IMG_SIZE = 224
 NUM_EPOCHS = 20
 IMG_CHANNELS = 3  ## Change this to 1 for grayscale.
-COLOUR_MODE = "rgb"
 BATCH_SIZE = 32
 
 # set dir of files
@@ -39,7 +39,6 @@ SAVED_MODEL_PATH = "saved_model/"
 AUTOTUNE = tf.data.AUTOTUNE
 AUGMENTATION = False
 TRAIN_MODE = True
-GENERATE_DATASET = True
 
 
 # In[ ]:
@@ -57,14 +56,16 @@ center_crop_layer = tf.keras.layers.CenterCrop(IMG_SIZE, IMG_SIZE)
 # In[ ]:
 
 
-def crop_center(frame):
-    cropped = center_crop_layer(frame[None, ...])
-    cropped = cropped.numpy().squeeze()
-    return cropped
+def crop_center_square(frame):
+    y, x = frame.shape[0:2]
+    min_dim = min(y, x)
+    start_x = (x // 2) - (min_dim // 2)
+    start_y = (y // 2) - (min_dim // 2)
+    return frame[start_y : start_y+min_dim, start_x : start_x+min_dim]
 
 # Following method is modified from this tutorial:
 # https://www.tensorflow.org/hub/tutorials/action_recognition_with_tf_hub
-def load_video(path, max_frames=0):
+def load_video(path, max_frames=0, resize=(IMG_SIZE, IMG_SIZE)):
     cap = cv2.VideoCapture(path)
     frames = []
     try:
@@ -72,7 +73,8 @@ def load_video(path, max_frames=0):
             ret, frame = cap.read()
             if not ret:
                 break
-            frame = crop_center(frame)
+            frame = crop_center_square(frame)
+            frame = cv2.resize(frame, resize)
             frame = frame[:, :, [2, 1, 0]]
             frames.append(frame)
 
@@ -119,61 +121,60 @@ print(label_processor.get_vocabulary())
 
 def prepare_all_videos(df, root_dir):
     num_samples = len(df)
-    df['video_paths'] = df['tag'] + "/" + df['video_name']
+    df['video_paths'] = root_dir + df['tag'] + "/" + df['video_name']
     video_paths = df["video_paths"].values.tolist()
     # video_paths = df["video_name"].values.tolist()
     labels = df["tag"].values
     # print(labels)
     labels = label_processor(labels[..., None]).numpy()
-    # print(video_paths)
-    # print(labels)
-    # `frame_features` are what we will feed to our sequence model.
+
+    # `frame_masks` and `frame_features` are what we will feed to our sequence model.
+    # `frame_masks` will contain a bunch of booleans denoting if a timestep is
+    # masked with padding or not.
     frame_masks = np.zeros(shape=(num_samples, MAX_SEQ_LENGTH), dtype="bool")
     frame_features = np.zeros(
         shape=(num_samples, MAX_SEQ_LENGTH, NUM_FEATURES), dtype="float32"
     )
 
     # For each video.
-    for idx, path in enumerate(video_paths):
-        # Gather all its frames and add a batch dimension.
-        frames = load_video(os.path.join(root_dir, path))
+    for idx,path in enumerate(video_paths):
+        # Gather all its frames and add a batch dimension.hike intern
+        #path = video_paths[idx]
+        frames = load_video(path)
         frames = frames[None, ...]
+
+        gc.collect()
 
         # Initialize placeholders to store the masks and features of the current video.
         temp_frame_mask = np.zeros(shape=(1, MAX_SEQ_LENGTH,), dtype="bool")
-        temp_frame_features = np.zeros(
+        temp_frame_featutes = np.zeros(
             shape=(1, MAX_SEQ_LENGTH, NUM_FEATURES), dtype="float32"
         )
 
         # Extract features from the frames of the current video.
         for i, batch in enumerate(frames):
-            video_length = batch.shape[0]
-            length = min(MAX_SEQ_LENGTH, video_length)
-            for j in range(length):
-                temp_frame_features[i, j, :] = feature_extractor.predict(
-                    batch[None, j, :]
-                )
-            temp_frame_mask[i, :length] = 1  # 1 = not masked, 0 = masked
+            try:
+                video_length = batch.shape[1]
+                length = min(MAX_SEQ_LENGTH, video_length)
+                for j in range(length):
+                    temp_frame_featutes[i, j, :] = feature_extractor.predict(batch[None, j, :])
+                temp_frame_mask[i, :length] = 1  # 1 = not masked, 0 = masked
+                frame_features[idx,] = temp_frame_featutes.squeeze()
+                frame_masks[idx,] = temp_frame_mask.squeeze()
+            except:
+                #print(i, j, length)
+                pass
 
-        frame_features[idx,] = temp_frame_features.squeeze()
-        frame_masks[idx,] = temp_frame_mask.squeeze()
+        gc.collect()
+        # print(idx)
 
     return (frame_features, frame_masks), labels
 
+gc.collect()
 
-if GENERATE_DATASET:
-    train_data, train_labels= prepare_all_videos(train_df, ROOT_DATASET_PATH)
-    test_data, test_labels= prepare_all_videos(test_df, ROOT_DATASET_PATH)
+train_data, train_labels= prepare_all_videos(train_df, ROOT_DATASET_PATH)
+
     
-#     np.save("train_data.npy", train_data)
-#     np.save("train_labels.npy", train_labels)
-    
-#     np.save("test_data.npy", test_data)    
-#     np.save("test_labels.npy", test_labels)
-
-# train_data, train_labels = np.load("train_data.npy"), np.load("train_labels.npy")
-# test_data, test_labels = np.load("test_data.npy"), np.load("test_labels.npy")
-
 print(f"Frame features in train set: {train_data[0].shape}")
 print(f"Frame masks in train set: {train_data[1].shape}")
 
@@ -188,24 +189,24 @@ def build_our_model(nb_classes):
 
     # Refer to the following tutorial to understand the significance of using `mask`:
     # https://keras.io/api/layers/recurrent_layers/gru/
-    x = keras.layers.LSTM(200, return_sequences=True)(
+    x = tf.keras.layers.LSTM(200, return_sequences=True)(
         frame_features_input, mask=mask_input
     )
 
-    x = keras.layers.LSTM(200, return_sequences=True)(x)
+    x = tf.keras.layers.LSTM(200, return_sequences=True)(x)
 
-    x = keras.layers.GRU(20)(x)
+    x = tf.keras.layers.GRU(20)(x)
     #x = keras.layers.Dropout(0.4)(x)
 
 
-    x = keras.layers.Dense(2048, activation="relu")(x)
-    x = keras.layers.Dense(1024, activation="relu")(x)
+    x = tf.keras.layers.Dense(2048, activation="relu")(x)
+    x = tf.keras.layers.Dense(1024, activation="relu")(x)
 
-    x = keras.layers.Dense(256, activation="relu")(x)
-    x = keras.layers.Dense(256, activation="relu")(x)
+    x = tf.keras.layers.Dense(256, activation="relu")(x)
+    x = tf.keras.layers.Dense(256, activation="relu")(x)
 
-    x = keras.layers.Dense(256, activation="relu")(x)
-    x = keras.layers.Dense(256, activation="relu")(x)
+    x = tf.keras.layers.Dense(256, activation="relu")(x)
+    x = tf.keras.layers.Dense(256, activation="relu")(x)
     
     output = tf.keras.layers.Dense(nb_classes, activation="softmax")(x)
 
@@ -235,6 +236,7 @@ def run_experiment():
         callbacks=[checkpoint],
     )
     seq_model.load_weights(SAVED_MODEL_PATH)
+    test_data, test_labels= prepare_all_videos(test_df, ROOT_DATASET_PATH)
     _, accuracy = seq_model.evaluate([test_data[0], test_data[1]], test_labels)
     print(f"Test accuracy: {round(accuracy * 100, 2)}%")
 
