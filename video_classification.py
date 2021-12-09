@@ -13,6 +13,7 @@ import cv2
 from collections import deque
 import sys
 import gc
+import pickle
 
 from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc, accuracy_score, precision_score, recall_score, f1_score
 
@@ -39,6 +40,7 @@ SAVED_MODEL_PATH = "saved_model/"
 AUTOTUNE = tf.data.AUTOTUNE
 AUGMENTATION = False
 TRAIN_MODE = True
+GENERATE_DATASET = True
 
 
 # In[ ]:
@@ -50,22 +52,20 @@ test_df = pd.read_csv("test.csv")
 print(f"Total videos for training: {len(train_df)}")
 print(f"Total videos for testing: {len(test_df)}")
 
-center_crop_layer = tf.keras.layers.CenterCrop(IMG_SIZE, IMG_SIZE)
-
 
 # In[ ]:
 
 
-def crop_center_square(frame):
-    y, x = frame.shape[0:2]
-    min_dim = min(y, x)
-    start_x = (x // 2) - (min_dim // 2)
-    start_y = (y // 2) - (min_dim // 2)
-    return frame[start_y : start_y+min_dim, start_x : start_x+min_dim]
+# def crop_center_square(frame):
+#     y, x = frame.shape[0:2]
+#     min_dim = min(y, x)
+#     start_x = (x // 2) - (min_dim // 2)
+#     start_y = (y // 2) - (min_dim // 2)
+#     return frame[start_y : start_y+min_dim, start_x : start_x+min_dim]
 
 # Following method is modified from this tutorial:
 # https://www.tensorflow.org/hub/tutorials/action_recognition_with_tf_hub
-def load_video(path, max_frames=0, resize=(IMG_SIZE, IMG_SIZE)):
+def load_video(path, max_frames=20, resize=(IMG_SIZE, IMG_SIZE)):
     cap = cv2.VideoCapture(path)
     frames = []
     try:
@@ -73,7 +73,7 @@ def load_video(path, max_frames=0, resize=(IMG_SIZE, IMG_SIZE)):
             ret, frame = cap.read()
             if not ret:
                 break
-            frame = crop_center_square(frame)
+            # frame = crop_center_square(frame)
             frame = cv2.resize(frame, resize)
             frame = frame[:, :, [2, 1, 0]]
             frames.append(frame)
@@ -85,15 +85,15 @@ def load_video(path, max_frames=0, resize=(IMG_SIZE, IMG_SIZE)):
     return np.array(frames)
 
 def build_feature_extractor():
-    feature_extractor = tf.keras.applications.DenseNet121(
+    feature_extractor = tf.keras.applications.InceptionV3(
         weights="imagenet",
         include_top=False,
         pooling="avg",
-        input_shape=(IMG_SIZE, IMG_SIZE, 3),
+        input_shape=(IMG_SIZE, IMG_SIZE, IMG_CHANNELS),
     )
-    preprocess_input = tf.keras.applications.densenet.preprocess_input
+    preprocess_input = tf.keras.applications.inception_v3.preprocess_input
 
-    inputs = tf.keras.Input((IMG_SIZE, IMG_SIZE, 3))
+    inputs = tf.keras.Input((IMG_SIZE, IMG_SIZE, IMG_CHANNELS))
     preprocessed = preprocess_input(inputs)
 
     outputs = feature_extractor(preprocessed)
@@ -166,17 +166,98 @@ def prepare_all_videos(df, root_dir):
                 pass
 
         gc.collect()
-        # print(idx)
+        print(idx)
 
     return (frame_features, frame_masks), labels
 
 gc.collect()
 
-train_data, train_labels= prepare_all_videos(train_df, ROOT_DATASET_PATH)
+if GENERATE_DATASET:
+    train_data, train_labels= prepare_all_videos(train_df, ROOT_DATASET_PATH)
+    test_data, test_labels= prepare_all_videos(test_df, ROOT_DATASET_PATH)
 
-    
+    with open('train_data.pkl','wb') as f:
+        pickle.dump(train_data, f)
+
+    with open('train_labels.pkl','wb') as f:
+        pickle.dump(train_labels, f)
+
+    with open('test_data.pkl','wb') as f:
+        pickle.dump(test_data, f)
+
+    with open('test_labels.pkl','wb') as f:
+        pickle.dump(test_labels, f)
+
+
+
+f = open('train_data.pkl', 'rb')
+train_data = pickle.load(f)
+f.close()
+
+f = open('train_labels.pkl', 'rb')
+train_labels = pickle.load(f)
+f.close()
+
+f = open('test_data.pkl', 'rb')
+test_data = pickle.load(f)
+f.close()
+
+f = open('test_labels.pkl', 'rb')
+test_labels = pickle.load(f)
+f.close()
+
+
 print(f"Frame features in train set: {train_data[0].shape}")
 print(f"Frame masks in train set: {train_data[1].shape}")
+
+
+# In[ ]:
+
+
+def plot_epoch_result(epochs, loss, name, model_name, colour):
+    plt.plot(epochs, loss, colour, label=name)
+#     plt.plot(epochs, disc_loss, 'b', label='Discriminator loss')
+    plt.title(name)
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.savefig(model_name+ '_'+name+'_epoch_result.png')
+    plt.show()
+    
+class CustomSaver(tf.keras.callbacks.Callback):
+    def __init__(self,
+                 model_path,
+                 n_model
+                ):
+        super(CustomSaver, self).__init__()
+        self.history = {}
+        self.epoch = []
+        self.model_path = model_path
+    
+        self.name_model = n_model
+        self.custom_loss = []
+        self.epochs_list = []
+            
+    def on_train_end(self, logs=None):
+        print(self.model_path)
+        self.model.save_weights(self.model_path)
+        
+        plot_epoch_result(self.epochs_list, self.custom_loss, "Loss", self.name_model, "g")
+
+    def on_epoch_end(self, epoch, logs=None):
+        if logs is None:
+            logs = {}
+        self.epoch.append(epoch)
+        for k, v in logs.items():
+#             print(k, v)
+            self.history.setdefault(k, []).append(v)
+        
+        self.epochs_list.append(epoch)
+        self.custom_loss.append(logs["loss"])
+
+        if (epoch + 1) % 15 == 0:
+            self.model.save_weights(self.model_path)
+            print('saved for epoch',epoch + 1)
 
 
 # In[ ]:
@@ -223,24 +304,37 @@ def build_our_model(nb_classes):
 
 # Utility for running experiments.
 def run_experiment():
+    name_model = str(IMG_SIZE)+"_UCF101_"+str(NUM_EPOCHS)
     class_vocab = label_processor.get_vocabulary()
     seq_model = build_our_model(len(class_vocab))
     checkpoint = tf.keras.callbacks.ModelCheckpoint(
         SAVED_MODEL_PATH, save_weights_only=True, save_best_only=True, verbose=1
     )
+    
+    saver_callback = CustomSaver(
+            SAVED_MODEL_PATH,
+            name_model
+        )
+    
     history = seq_model.fit(
         [train_data[0], train_data[1]],
         train_labels,
-        validation_split=0.2,
+        # validation_split=0.2,
         epochs=NUM_EPOCHS,
-        callbacks=[checkpoint],
+        callbacks=[checkpoint, saver_callback],
     )
     seq_model.load_weights(SAVED_MODEL_PATH)
-    test_data, test_labels= prepare_all_videos(test_df, ROOT_DATASET_PATH)
+    
     _, accuracy = seq_model.evaluate([test_data[0], test_data[1]], test_labels)
     print(f"Test accuracy: {round(accuracy * 100, 2)}%")
 
     return history, seq_model
 
-_, sequence_model = run_experiment()
+
+# In[ ]:
+
+
+if __name__ == "__main__":
+    print("run experiments")
+    _, sequence_model = run_experiment()
 
