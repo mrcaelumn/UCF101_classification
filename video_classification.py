@@ -32,8 +32,10 @@ IMG_CHANNELS = 3  ## Change this to 1 for grayscale.
 BATCH_SIZE = 32
 
 # set dir of files
-TRAIN_DATASET_PATH = "train.csv"
-TEST_DATASET_PATH = "test.csv"
+TRAIN_DATASET_VERSION = "train03"
+TEST_DATASET_VERSION = "test03"
+TRAIN_DATASET_PATH = TRAIN_DATASET_VERSION+".csv"
+TEST_DATASET_PATH = TEST_DATASET_VERSION+".csv"
 ROOT_DATASET_PATH = "dataset/UCF-101/"
 SAVED_MODEL_PATH = "saved_model/"
 
@@ -41,13 +43,14 @@ AUTOTUNE = tf.data.AUTOTUNE
 AUGMENTATION = False
 TRAIN_MODE = True
 GENERATE_DATASET = True
+RETRAIN_MODEL = True
 
 
 # In[ ]:
 
 
-train_df = pd.read_csv("train.csv")
-test_df = pd.read_csv("test.csv")
+train_df = pd.read_csv(TRAIN_DATASET_PATH)
+test_df = pd.read_csv(TEST_DATASET_PATH)
 
 print(f"Total videos for training: {len(train_df)}")
 print(f"Total videos for testing: {len(test_df)}")
@@ -65,7 +68,7 @@ print(f"Total videos for testing: {len(test_df)}")
 
 # Following method is modified from this tutorial:
 # https://www.tensorflow.org/hub/tutorials/action_recognition_with_tf_hub
-def load_video(path, max_frames=20, resize=(IMG_SIZE, IMG_SIZE)):
+def load_video(path, max_frames=0, resize=(IMG_SIZE, IMG_SIZE)):
     cap = cv2.VideoCapture(path)
     frames = []
     try:
@@ -176,33 +179,33 @@ if GENERATE_DATASET:
     train_data, train_labels= prepare_all_videos(train_df, ROOT_DATASET_PATH)
     test_data, test_labels= prepare_all_videos(test_df, ROOT_DATASET_PATH)
 
-    with open('train_data.pkl','wb') as f:
+    with open(TRAIN_DATASET_VERSION+'_data.pkl','wb') as f:
         pickle.dump(train_data, f)
 
-    with open('train_labels.pkl','wb') as f:
+    with open(TRAIN_DATASET_VERSION+'_labels.pkl','wb') as f:
         pickle.dump(train_labels, f)
 
-    with open('test_data.pkl','wb') as f:
+    with open(TEST_DATASET_VERSION+'_data.pkl','wb') as f:
         pickle.dump(test_data, f)
 
-    with open('test_labels.pkl','wb') as f:
+    with open(TEST_DATASET_VERSION+'_labels.pkl','wb') as f:
         pickle.dump(test_labels, f)
 
 
 
-f = open('train_data.pkl', 'rb')
+f = open(TRAIN_DATASET_VERSION+'_data.pkl', 'rb')
 train_data = pickle.load(f)
 f.close()
 
-f = open('train_labels.pkl', 'rb')
+f = open(TRAIN_DATASET_VERSION+'_labels.pkl', 'rb')
 train_labels = pickle.load(f)
 f.close()
 
-f = open('test_data.pkl', 'rb')
+f = open(TEST_DATASET_VERSION+'_data.pkl', 'rb')
 test_data = pickle.load(f)
 f.close()
 
-f = open('test_labels.pkl', 'rb')
+f = open(TEST_DATASET_VERSION+'_labels.pkl', 'rb')
 test_labels = pickle.load(f)
 f.close()
 
@@ -302,20 +305,57 @@ def build_our_model(nb_classes):
 # In[ ]:
 
 
+def prepare_single_video(frames):
+    frames = frames[None, ...]
+    frame_mask = np.zeros(shape=(1, MAX_SEQ_LENGTH,), dtype="bool")
+    frame_features = np.zeros(shape=(1, MAX_SEQ_LENGTH, NUM_FEATURES), dtype="float32")
+
+    for i, batch in enumerate(frames):
+        video_length = batch.shape[0]
+        length = min(MAX_SEQ_LENGTH, video_length)
+        for j in range(length):
+            frame_features[i, j, :] = feature_extractor.predict(batch[None, j, :])
+        frame_mask[i, :length] = 1  # 1 = not masked, 0 = masked
+
+    return frame_features, frame_mask
+
+def sequence_prediction(path):
+    class_vocab = label_processor.get_vocabulary()
+
+    frames = load_video(os.path.join("test", path))
+    frame_features, frame_mask = prepare_single_video(frames)
+    probabilities = sequence_model.predict([frame_features, frame_mask])[0]
+
+    for i in np.argsort(probabilities)[::-1]:
+        print(f"  {class_vocab[i]}: {probabilities[i] * 100:5.2f}%")
+    return frames
+
+
+# In[ ]:
+
+
 # Utility for running experiments.
 def run_experiment():
     name_model = str(IMG_SIZE)+"_UCF101_"+str(NUM_EPOCHS)
     class_vocab = label_processor.get_vocabulary()
+    
     seq_model = build_our_model(len(class_vocab))
+    
     checkpoint = tf.keras.callbacks.ModelCheckpoint(
         SAVED_MODEL_PATH, save_weights_only=True, save_best_only=True, verbose=1
     )
     
+    path_model = SAVED_MODEL_PATH + name_model + "_model" + ".h5"
+    print(path_model)
     saver_callback = CustomSaver(
-            SAVED_MODEL_PATH,
+            path_model,
             name_model
         )
     
+    if RETRAIN_MODEL:
+        seq_model.load_weights(path_model)
+        # seq_model = tf.keras.models.load_model(path_model)
+        
     history = seq_model.fit(
         [train_data[0], train_data[1]],
         train_labels,
@@ -323,7 +363,7 @@ def run_experiment():
         epochs=NUM_EPOCHS,
         callbacks=[checkpoint, saver_callback],
     )
-    seq_model.load_weights(SAVED_MODEL_PATH)
+    # seq_model.load_weights(SAVED_MODEL_PATH)
     
     _, accuracy = seq_model.evaluate([test_data[0], test_data[1]], test_labels)
     print(f"Test accuracy: {round(accuracy * 100, 2)}%")
