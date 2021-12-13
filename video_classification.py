@@ -32,8 +32,8 @@ IMG_CHANNELS = 3  ## Change this to 1 for grayscale.
 BATCH_SIZE = 32
 
 # set dir of files
-TRAIN_DATASET_VERSION = "train03"
-TEST_DATASET_VERSION = "test03"
+TRAIN_DATASET_VERSION = "trainfull"
+TEST_DATASET_VERSION = "testfull"
 TRAIN_DATASET_PATH = TRAIN_DATASET_VERSION+".csv"
 TEST_DATASET_PATH = TEST_DATASET_VERSION+".csv"
 ROOT_DATASET_PATH = "dataset/UCF-101/"
@@ -43,7 +43,7 @@ AUTOTUNE = tf.data.AUTOTUNE
 AUGMENTATION = False
 TRAIN_MODE = True
 GENERATE_DATASET = True
-RETRAIN_MODEL = True
+RETRAIN_MODEL = False
 
 
 # In[ ]:
@@ -217,6 +217,32 @@ print(f"Frame masks in train set: {train_data[1].shape}")
 # In[ ]:
 
 
+def confusion_matrix_report(labels, predicts, target_names):
+    confusion = confusion_matrix(labels, predicts)
+    print('Confusion Matrix\n')
+    print(confusion)
+    
+    print('\nAccuracy: {:.2f}\n'.format(accuracy_score(labels, predicts)))
+
+    print('Micro Precision: {:.2f}'.format(precision_score(labels, predicts, average='micro')))
+    print('Micro Recall: {:.2f}'.format(recall_score(labels, predicts, average='micro')))
+    print('Micro F1-score: {:.2f}\n'.format(f1_score(labels, predicts, average='micro')))
+
+    print('Macro Precision: {:.2f}'.format(precision_score(labels, predicts, average='macro')))
+    print('Macro Recall: {:.2f}'.format(recall_score(labels, predicts, average='macro')))
+    print('Macro F1-score: {:.2f}\n'.format(f1_score(labels, predicts, average='macro')))
+
+    print('Weighted Precision: {:.2f}'.format(precision_score(labels, predicts, average='weighted')))
+    print('Weighted Recall: {:.2f}'.format(recall_score(labels, predicts, average='weighted')))
+    print('Weighted F1-score: {:.2f}'.format(f1_score(labels, predicts, average='weighted')))
+
+    print('\nClassification Report\n')
+    print(classification_report(labels, predicts, target_names=target_names))
+
+
+# In[ ]:
+
+
 def plot_epoch_result(epochs, loss, name, model_name, colour):
     plt.plot(epochs, loss, colour, label=name)
 #     plt.plot(epochs, disc_loss, 'b', label='Discriminator loss')
@@ -243,7 +269,7 @@ class CustomSaver(tf.keras.callbacks.Callback):
             
     def on_train_end(self, logs=None):
         print(self.model_path)
-        self.model.save_weights(self.model_path)
+        self.model.save(self.model_path)
         
         plot_epoch_result(self.epochs_list, self.custom_loss, "Loss", self.name_model, "g")
 
@@ -330,6 +356,41 @@ def sequence_prediction(path):
         print(f"  {class_vocab[i]}: {probabilities[i] * 100:5.2f}%")
     return frames
 
+def testing_stage(model, df, root_dir):
+    print("testing start")
+    num_samples = len(df)
+    df['video_paths'] = root_dir + df['tag'] + "/" + df['video_name']
+    video_paths = df["video_paths"].values.tolist()
+    labels = df["tag"].values
+    # labels = label_processor(labels[..., None]).numpy().flatten()
+    class_vocab = label_processor.get_vocabulary()
+    predictions = []
+    name_list = []
+    # print(labels)
+    for idx, path in enumerate(video_paths):
+        print(path)
+        frames = load_video(path)
+        frame_features, frame_mask = prepare_single_video(frames)
+        probabilities = sequence_model.predict([frame_features, frame_mask])[0]
+        probs = np.argsort(probabilities)[::-1]
+        name_image = os.path.basename(path)
+        print(name_image)
+        predictions.append(class_vocab[probs[0]])
+        name_list.append(name_image)
+        # print(class_vocab[probs[0]], probs[0])
+        for i in probs:
+            print(f"{class_vocab[i]}: {probabilities[i] * 100:5.2f}%")
+    
+    
+    confusion_matrix_report(labels, predictions, class_vocab)
+    
+    
+    print("created csv for the result.")
+    with open('predictions_result.csv', 'w') as f:
+        writer = csv.writer(f)
+        writer.writerow(['ImageName', 'Label'])
+        writer.writerows(zip(name_list, predictions))
+
 
 # In[ ]:
 
@@ -353,22 +414,25 @@ def run_experiment():
         )
     
     if RETRAIN_MODEL:
-        seq_model.load_weights(path_model)
-        # seq_model = tf.keras.models.load_model(path_model)
-        
-    history = seq_model.fit(
-        [train_data[0], train_data[1]],
-        train_labels,
-        # validation_split=0.2,
-        epochs=NUM_EPOCHS,
-        callbacks=[checkpoint, saver_callback],
-    )
+        print("Model Load Weights.")
+        # seq_model.load_weights(path_model)
+        seq_model = tf.keras.models.load_model(path_model)
+    
+    if TRAIN_MODE: 
+        history = seq_model.fit(
+            [train_data[0], train_data[1]],
+            train_labels,
+            # validation_split=0.2,
+            epochs=NUM_EPOCHS,
+            callbacks=[checkpoint, saver_callback],
+        )
     # seq_model.load_weights(SAVED_MODEL_PATH)
     
+    seq_model = tf.keras.models.load_model(path_model)
     _, accuracy = seq_model.evaluate([test_data[0], test_data[1]], test_labels)
     print(f"Test accuracy: {round(accuracy * 100, 2)}%")
 
-    return history, seq_model
+    return seq_model
 
 
 # In[ ]:
@@ -376,5 +440,6 @@ def run_experiment():
 
 if __name__ == "__main__":
     print("run experiments")
-    _, sequence_model = run_experiment()
+    sequence_model = run_experiment()
+    testing_stage(sequence_model, test_df, ROOT_DATASET_PATH)
 
