@@ -32,8 +32,8 @@ IMG_CHANNELS = 3  ## Change this to 1 for grayscale.
 BATCH_SIZE = 32
 
 # set dir of files
-TRAIN_DATASET_VERSION = "trainfull"
-TEST_DATASET_VERSION = "testfull"
+TRAIN_DATASET_VERSION = "train03"
+TEST_DATASET_VERSION = "test03"
 TRAIN_DATASET_PATH = TRAIN_DATASET_VERSION+".csv"
 TEST_DATASET_PATH = TEST_DATASET_VERSION+".csv"
 ROOT_DATASET_PATH = "dataset/UCF-101/"
@@ -41,8 +41,8 @@ SAVED_MODEL_PATH = "saved_model/"
 
 AUTOTUNE = tf.data.AUTOTUNE
 AUGMENTATION = False
-TRAIN_MODE = True
-GENERATE_DATASET = True
+TRAIN_MODE = False
+GENERATE_DATASET = False
 RETRAIN_MODEL = False
 
 
@@ -402,9 +402,9 @@ def run_experiment():
     
     seq_model = build_our_model(len(class_vocab))
     
-    checkpoint = tf.keras.callbacks.ModelCheckpoint(
-        SAVED_MODEL_PATH, save_weights_only=True, save_best_only=True, verbose=1
-    )
+    # checkpoint = tf.keras.callbacks.ModelCheckpoint(
+    #     SAVED_MODEL_PATH, save_weights_only=True, save_best_only=True, verbose=1
+    # )
     
     path_model = SAVED_MODEL_PATH + name_model + "_model" + ".h5"
     print(path_model)
@@ -424,7 +424,9 @@ def run_experiment():
             train_labels,
             # validation_split=0.2,
             epochs=NUM_EPOCHS,
-            callbacks=[checkpoint, saver_callback],
+            callbacks=[
+                # checkpoint, 
+                saver_callback],
         )
     # seq_model.load_weights(SAVED_MODEL_PATH)
     
