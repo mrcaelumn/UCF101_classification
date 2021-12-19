@@ -32,8 +32,8 @@ IMG_CHANNELS = 3  ## Change this to 1 for grayscale.
 BATCH_SIZE = 32
 
 # set dir of files
-TRAIN_DATASET_VERSION = "train03"
-TEST_DATASET_VERSION = "test03"
+TRAIN_DATASET_VERSION = "train02"
+TEST_DATASET_VERSION = "test02"
 TRAIN_DATASET_PATH = TRAIN_DATASET_VERSION+".csv"
 TEST_DATASET_PATH = TEST_DATASET_VERSION+".csv"
 ROOT_DATASET_PATH = "dataset/UCF-101/"
@@ -42,7 +42,7 @@ SAVED_MODEL_PATH = "saved_model/"
 AUTOTUNE = tf.data.AUTOTUNE
 AUGMENTATION = False
 TRAIN_MODE = False
-GENERATE_DATASET = False
+GENERATE_DATASET = True
 RETRAIN_MODEL = False
 
 
@@ -177,14 +177,14 @@ gc.collect()
 
 if GENERATE_DATASET:
     train_data, train_labels= prepare_all_videos(train_df, ROOT_DATASET_PATH)
-    test_data, test_labels= prepare_all_videos(test_df, ROOT_DATASET_PATH)
-
     with open(TRAIN_DATASET_VERSION+'_data.pkl','wb') as f:
         pickle.dump(train_data, f)
 
     with open(TRAIN_DATASET_VERSION+'_labels.pkl','wb') as f:
         pickle.dump(train_labels, f)
-
+        
+        
+    test_data, test_labels= prepare_all_videos(test_df, ROOT_DATASET_PATH)
     with open(TEST_DATASET_VERSION+'_data.pkl','wb') as f:
         pickle.dump(test_data, f)
 
