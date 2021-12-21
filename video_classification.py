@@ -32,8 +32,8 @@ IMG_CHANNELS = 3  ## Change this to 1 for grayscale.
 BATCH_SIZE = 32
 
 # set dir of files
-TRAIN_DATASET_VERSION = "test_train03"
-TEST_DATASET_VERSION = "test_test03"
+TRAIN_DATASET_VERSION = "train03"
+TEST_DATASET_VERSION = "test03"
 TRAIN_DATASET_PATH = TRAIN_DATASET_VERSION+".csv"
 TEST_DATASET_PATH = TEST_DATASET_VERSION+".csv"
 ROOT_DATASET_PATH = "dataset/UCF-101/"
@@ -41,7 +41,7 @@ SAVED_MODEL_PATH = "saved_model/"
 
 AUTOTUNE = tf.data.AUTOTUNE
 AUGMENTATION = False
-TRAIN_MODE = False
+TRAIN_MODE = True
 GENERATE_DATASET = True
 RETRAIN_MODEL = False
 
@@ -175,26 +175,26 @@ def prepare_all_videos(df, root_dir):
 
 gc.collect()
 
-if GENERATE_DATASET:
-    train_data, train_labels= prepare_all_videos(train_df, ROOT_DATASET_PATH)
+# if GENERATE_DATASET:
+train_data, train_labels= prepare_all_videos(train_df, ROOT_DATASET_PATH)
         
-    pickle.dump(train_data, gzip.open(TRAIN_DATASET_VERSION+'_data.pkl.gz', 'wb'))
-    pickle.dump(train_labels, gzip.open(TRAIN_DATASET_VERSION+'_labels.pkl.gz', 'wb'))
+#     pickle.dump(train_data, gzip.open(TRAIN_DATASET_VERSION+'_data.pkl.gz', 'wb'))
+#     pickle.dump(train_labels, gzip.open(TRAIN_DATASET_VERSION+'_labels.pkl.gz', 'wb'))
         
         
-    test_data, test_labels= prepare_all_videos(test_df, ROOT_DATASET_PATH)
+test_data, test_labels= prepare_all_videos(test_df, ROOT_DATASET_PATH)
         
-    pickle.dump(test_data, gzip.open(TEST_DATASET_VERSION+'_data.pkl.gz', 'wb'))
-    pickle.dump(test_labels, gzip.open(TEST_DATASET_VERSION+'_labels.pkl.gz', 'wb'))
+#     pickle.dump(test_data, gzip.open(TEST_DATASET_VERSION+'_data.pkl.gz', 'wb'))
+#     pickle.dump(test_labels, gzip.open(TEST_DATASET_VERSION+'_labels.pkl.gz', 'wb'))
 
 
 
-train_data = pickle.load(gzip.open(TRAIN_DATASET_VERSION+'_data.pkl.gz', 'rb' ))
-train_labels = pickle.load(gzip.open(TRAIN_DATASET_VERSION+'_labels.pkl.gz', 'rb'))
+# train_data = pickle.load(gzip.open(TRAIN_DATASET_VERSION+'_data.pkl.gz', 'rb' ))
+# train_labels = pickle.load(gzip.open(TRAIN_DATASET_VERSION+'_labels.pkl.gz', 'rb'))
 
 
-test_data = pickle.load(gzip.open(TEST_DATASET_VERSION+'_data.pkl.gz', 'rb'))
-test_labels = pickle.load(gzip.open(TEST_DATASET_VERSION+'_labels.pkl.gz', 'rb'))
+# test_data = pickle.load(gzip.open(TEST_DATASET_VERSION+'_data.pkl.gz', 'rb'))
+# test_labels = pickle.load(gzip.open(TEST_DATASET_VERSION+'_labels.pkl.gz', 'rb'))
 
 
 print(f"Frame features in train set: {train_data[0].shape}")
