@@ -88,19 +88,28 @@ def load_video(path, max_frames=0, resize=(IMG_SIZE, IMG_SIZE)):
     return np.array(frames)
 
 def build_feature_extractor():
-    feature_extractor = tf.keras.applications.resnet50.ResNet50(
-        weights="imagenet",
-        include_top=False,
-        pooling="avg",
-        input_shape=(IMG_SIZE, IMG_SIZE, IMG_CHANNELS),
-    )
-    preprocess_input = tf.keras.applications.resnet50.preprocess_input
-
-    inputs = tf.keras.Input((IMG_SIZE, IMG_SIZE, IMG_CHANNELS))
-    preprocessed = preprocess_input(inputs)
-
-    outputs = feature_extractor(preprocessed)
-    return tf.keras.Model(inputs, outputs, name="feature_extractor")
+    
+    baseModel = tf.keras.applications.resnet50.ResNet50(weights="imagenet", include_top=False,
+        input_tensor=tf.keras.Input(shape=(IMG_SIZE, IMG_SIZE, IMG_CHANNELS)))
+    
+    # loop over all layers in the base model and freeze them so they will
+    # *not* be updated during the training process
+    for layer in baseModel.layers:
+        layer.trainable = False
+        
+    # construct the head of the model that will be placed on top of the
+    # the base model
+    headModel = baseModel.output
+    headModel = tf.keras.layers.AveragePooling2D(pool_size=(7, 7))(headModel)
+    headModel = tf.keras.layers.Flatten(name="flatten")(headModel)
+    headModel = tf.keras.layers.Dense(512, activation="relu")(headModel)
+    headModel = tf.keras.layers.Dropout(0.5)(headModel)
+    headModel = tf.keras.layers.Dense(101, activation="softmax")(headModel)
+    # place the head FC model on top of the base model (this will become
+    # the actual model we will train)
+    model = tf.keras.Model(inputs=baseModel.input, outputs=headModel, name="feature_extractor")
+    
+    return model
 
 
 # In[ ]:
