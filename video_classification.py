@@ -88,13 +88,13 @@ def load_video(path, max_frames=0, resize=(IMG_SIZE, IMG_SIZE)):
     return np.array(frames)
 
 def build_feature_extractor():
-    feature_extractor = tf.keras.applications.InceptionV3(
+    feature_extractor = tf.keras.applications.resnet50.ResNet50(
         weights="imagenet",
         include_top=False,
         pooling="avg",
         input_shape=(IMG_SIZE, IMG_SIZE, IMG_CHANNELS),
     )
-    preprocess_input = tf.keras.applications.inception_v3.preprocess_input
+    preprocess_input = tf.keras.applications.resnet50.preprocess_input
 
     inputs = tf.keras.Input((IMG_SIZE, IMG_SIZE, IMG_CHANNELS))
     preprocessed = preprocess_input(inputs)
@@ -143,7 +143,7 @@ def prepare_all_videos(df, root_dir):
     for idx,path in enumerate(video_paths):
         # Gather all its frames and add a batch dimension.hike intern
         #path = video_paths[idx]
-        frames = load_video(path)
+        frames = load_video(path, max_frames=5)
         frames = frames[None, ...]
 
         gc.collect()
