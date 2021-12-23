@@ -26,14 +26,15 @@ assert version.parse(tf.__version__).release[0] >= 2,     "This notebook require
 """ Set Hyper parameters """
 MAX_SEQ_LENGTH = 100
 NUM_FEATURES = 2048
-IMG_SIZE = 224
+IMG_H = 224
+IMG_W = 224
+IMG_C = 3  ## Change this to 1 for grayscale.
 NUM_EPOCHS = 20
-IMG_CHANNELS = 3  ## Change this to 1 for grayscale.
+
 BATCH_SIZE = 32
 
 # set dir of files
-TRAIN_DATASET_VERSION = "train03"
-TEST_DATASET_VERSION = "test03"
+TRAIN_DATASET_VERSION = "trainfull"
 TRAIN_DATASET_PATH = TRAIN_DATASET_VERSION+".csv"
 TEST_DATASET_PATH = TEST_DATASET_VERSION+".csv"
 ROOT_DATASET_PATH = "dataset/UCF-101/"
@@ -68,7 +69,7 @@ print(f"Total videos for testing: {len(test_df)}")
 
 # Following method is modified from this tutorial:
 # https://www.tensorflow.org/hub/tutorials/action_recognition_with_tf_hub
-def load_video(path, max_frames=0, resize=(IMG_SIZE, IMG_SIZE)):
+def load_video(path, max_frames=10, resize=(IMG_H, IMG_W)):
     cap = cv2.VideoCapture(path)
     frames = []
     try:
@@ -89,25 +90,11 @@ def load_video(path, max_frames=0, resize=(IMG_SIZE, IMG_SIZE)):
 
 def build_feature_extractor():
     
-    baseModel = tf.keras.applications.resnet50.ResNet50(weights="imagenet", include_top=False,
-        input_tensor=tf.keras.Input(shape=(IMG_SIZE, IMG_SIZE, IMG_CHANNELS)))
+    baseModel = tf.keras.applications.InceptionV3(weights="imagenet", include_top=True,
+        input_tensor=tf.keras.Input(shape=(IMG_H, IMG_W, IMG_C)))
     
-    # loop over all layers in the base model and freeze them so they will
-    # *not* be updated during the training process
-    for layer in baseModel.layers:
-        layer.trainable = False
-        
-    # construct the head of the model that will be placed on top of the
-    # the base model
-    headModel = baseModel.output
-    headModel = tf.keras.layers.AveragePooling2D(pool_size=(7, 7))(headModel)
-    headModel = tf.keras.layers.Flatten(name="flatten")(headModel)
-    headModel = tf.keras.layers.Dense(512, activation="relu")(headModel)
-    headModel = tf.keras.layers.Dropout(0.5)(headModel)
-    headModel = tf.keras.layers.Dense(101, activation="softmax")(headModel)
-    # place the head FC model on top of the base model (this will become
     # the actual model we will train)
-    model = tf.keras.Model(inputs=baseModel.input, outputs=headModel, name="feature_extractor")
+    model = tf.keras.Model(inputs=baseModel.input, outputs=baseModel.get_layer('avg_pool').output, name="feature_extractor")
     
     return model
 
@@ -143,7 +130,7 @@ def prepare_all_videos(df, root_dir):
     # `frame_masks` and `frame_features` are what we will feed to our sequence model.
     # `frame_masks` will contain a bunch of booleans denoting if a timestep is
     # masked with padding or not.
-    frame_masks = np.zeros(shape=(num_samples, MAX_SEQ_LENGTH), dtype="bool")
+    # frame_masks = np.zeros(shape=(num_samples, MAX_SEQ_LENGTH), dtype="bool")
     frame_features = np.zeros(
         shape=(num_samples, MAX_SEQ_LENGTH, NUM_FEATURES), dtype="float32"
     )
@@ -152,13 +139,13 @@ def prepare_all_videos(df, root_dir):
     for idx,path in enumerate(video_paths):
         # Gather all its frames and add a batch dimension.hike intern
         #path = video_paths[idx]
-        frames = load_video(path, max_frames=5)
+        frames = load_video(path)
         frames = frames[None, ...]
 
         gc.collect()
 
         # Initialize placeholders to store the masks and features of the current video.
-        temp_frame_mask = np.zeros(shape=(1, MAX_SEQ_LENGTH,), dtype="bool")
+        # temp_frame_mask = np.zeros(shape=(1, MAX_SEQ_LENGTH,), dtype="bool")
         temp_frame_featutes = np.zeros(
             shape=(1, MAX_SEQ_LENGTH, NUM_FEATURES), dtype="float32"
         )
@@ -172,7 +159,7 @@ def prepare_all_videos(df, root_dir):
                     temp_frame_featutes[i, j, :] = feature_extractor.predict(batch[None, j, :])
                 temp_frame_mask[i, :length] = 1  # 1 = not masked, 0 = masked
                 frame_features[idx,] = temp_frame_featutes.squeeze()
-                frame_masks[idx,] = temp_frame_mask.squeeze()
+                # frame_masks[idx,] = temp_frame_mask.squeeze()
             except:
                 #print(i, j, length)
                 pass
@@ -180,7 +167,7 @@ def prepare_all_videos(df, root_dir):
         gc.collect()
         print(idx)
 
-    return (frame_features, frame_masks), labels
+    return frame_features, labels
 
 gc.collect()
 
@@ -290,37 +277,22 @@ class CustomSaver(tf.keras.callbacks.Callback):
 
 def build_our_model(nb_classes):
     
-    frame_features_input = tf.keras.Input((MAX_SEQ_LENGTH, NUM_FEATURES))
-    mask_input = tf.keras.Input((MAX_SEQ_LENGTH,), dtype="bool")
-
+    inputs = tf.keras.Input((MAX_SEQ_LENGTH, NUM_FEATURES))
+    
+    
     # Refer to the following tutorial to understand the significance of using `mask`:
     # https://keras.io/api/layers/recurrent_layers/gru/
-    x = tf.keras.layers.LSTM(200, return_sequences=True)(
-        frame_features_input, mask=mask_input
-    )
+    x = tf.keras.layers.LSTM(NUM_FEATURES, return_sequences=True)(inputs)
+    x = tf.keras.layers.Dropout(0.5)(x)
+    x = tf.keras.layers.Dense(512, activation="relu")(x)
+    x = tf.keras.layers.Dropout(0.5)(x)
+    x = tf.keras.layers.Flatten()(x)
+    outputs = tf.keras.layers.Dense(nb_classes, activation="softmax")(x)
 
-    x = tf.keras.layers.LSTM(200, return_sequences=True)(x)
-
-    x = tf.keras.layers.GRU(20)(x)
-    #x = keras.layers.Dropout(0.4)(x)
-
-
-    x = tf.keras.layers.Dense(2048, activation="relu")(x)
-    x = tf.keras.layers.Dense(1024, activation="relu")(x)
-
-    x = tf.keras.layers.Dense(256, activation="relu")(x)
-    x = tf.keras.layers.Dense(256, activation="relu")(x)
-
-    x = tf.keras.layers.Dense(256, activation="relu")(x)
-    x = tf.keras.layers.Dense(256, activation="relu")(x)
+    optimizer = tf.keras.optimizers.Adam(lr=1e-4, decay=1e-6)
+    rnn_model = tf.keras.Model(inputs, outputs)
     
-    output = tf.keras.layers.Dense(nb_classes, activation="softmax")(x)
-
-    rnn_model = tf.keras.Model([frame_features_input, mask_input], output)
-
-    rnn_model.compile(
-        loss="sparse_categorical_crossentropy", optimizer="adam", metrics=["accuracy"]
-    )
+    rnn_model.compile(loss='sparse_categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
     return rnn_model
 
 
@@ -329,7 +301,7 @@ def build_our_model(nb_classes):
 
 def prepare_single_video(frames):
     frames = frames[None, ...]
-    frame_mask = np.zeros(shape=(1, MAX_SEQ_LENGTH,), dtype="bool")
+    # frame_mask = np.zeros(shape=(1, MAX_SEQ_LENGTH,), dtype="bool")
     frame_features = np.zeros(shape=(1, MAX_SEQ_LENGTH, NUM_FEATURES), dtype="float32")
 
     for i, batch in enumerate(frames):
@@ -337,9 +309,8 @@ def prepare_single_video(frames):
         length = min(MAX_SEQ_LENGTH, video_length)
         for j in range(length):
             frame_features[i, j, :] = feature_extractor.predict(batch[None, j, :])
-        frame_mask[i, :length] = 1  # 1 = not masked, 0 = masked
 
-    return frame_features, frame_mask
+    return frame_features
 
 def sequence_prediction(path):
     class_vocab = label_processor.get_vocabulary()
@@ -366,8 +337,8 @@ def testing_stage(model, df, root_dir):
     for idx, path in enumerate(video_paths):
         print(path)
         frames = load_video(path)
-        frame_features, frame_mask = prepare_single_video(frames)
-        probabilities = sequence_model.predict([frame_features, frame_mask])[0]
+        frame_features = prepare_single_video(frames)
+        probabilities = sequence_model.predict(frame_features)[0]
         probs = np.argsort(probabilities)[::-1]
         name_image = os.path.basename(path)
         print(name_image)
@@ -393,7 +364,7 @@ def testing_stage(model, df, root_dir):
 
 # Utility for running experiments.
 def run_experiment():
-    name_model = str(IMG_SIZE)+"_UCF101_"+str(NUM_EPOCHS)
+    name_model = str(IMG_H)+"_UCF101_"+str(NUM_EPOCHS)
     class_vocab = label_processor.get_vocabulary()
     
     seq_model = build_our_model(len(class_vocab))
@@ -416,7 +387,7 @@ def run_experiment():
     
     if TRAIN_MODE: 
         history = seq_model.fit(
-            [train_data[0], train_data[1]],
+            train_data,
             train_labels,
             # validation_split=0.2,
             epochs=NUM_EPOCHS,
@@ -427,7 +398,7 @@ def run_experiment():
     # seq_model.load_weights(SAVED_MODEL_PATH)
     
     seq_model = tf.keras.models.load_model(path_model)
-    _, accuracy = seq_model.evaluate([test_data[0], test_data[1]], test_labels)
+    _, accuracy = seq_model.evaluate(test_data, test_labels)
     print(f"Test accuracy: {round(accuracy * 100, 2)}%")
 
     return seq_model
@@ -440,4 +411,10 @@ if __name__ == "__main__":
     print("run experiments")
     sequence_model = run_experiment()
     testing_stage(sequence_model, test_df, ROOT_DATASET_PATH)
+
+
+# In[ ]:
+
+
+
 
